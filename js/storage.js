@@ -14,7 +14,8 @@ const DEFAULT_STATE = {
   model: "gemini-2.0-flash",
   serverUrl: "",         // optional local Archmage server, e.g. http://localhost:8787
   sessionId: "",         // stable id for server-side conversation memory
-  mode: "chat"           // wizard capability: chat | spell | story | trivia
+  mode: "chat",          // wizard capability: chat | spell | story | trivia
+  viewMode: "diary"      // page memory: "diary" (replies persist) | "vanishing" (ink is drunk)
 };
 
 const MAX_ENTRIES = 60;

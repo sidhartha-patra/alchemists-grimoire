@@ -210,6 +210,14 @@ function viewJournal() {
              title="${esc(MODES[m].hint)}">${esc(MODES[m].label)}</button>`).join("")}
       </div>
 
+      <div class="diary-toggle" role="group" aria-label="Page memory">
+        <span class="dt-label">The page</span>
+        <button class="vmode ${state.viewMode !== "vanishing" ? "active" : ""}" data-view="diary"
+          title="Replies stay, gathered as diary entries">&#128214; Diary</button>
+        <button class="vmode ${state.viewMode === "vanishing" ? "active" : ""}" data-view="vanishing"
+          title="The page drinks each reply after you read it">&#127787; Vanishing</button>
+      </div>
+
       <div class="ink-well">
         <div class="ink-ghost" id="inkGhost" aria-hidden="true"></div>
         <textarea id="inkInput" class="ink-input" rows="4"
@@ -248,8 +256,44 @@ function viewJournal() {
       input.focus();
     };
   });
+  $view.querySelectorAll(".vmode").forEach((b) => {
+    b.onclick = () => {
+      state.viewMode = b.dataset.view; persist();
+      $view.querySelectorAll(".vmode").forEach((x) => x.classList.toggle("active", x.dataset.view === state.viewMode));
+      const replyEl = document.getElementById("archmageReply");
+      const stage = document.getElementById("replyStage");
+      const controls = document.getElementById("replyControls");
+      if (state.viewMode === "vanishing") {
+        // Switching to Vanishing drinks whatever reply is on the page right now.
+        if (stage && !stage.hidden && replyEl && (replyEl.textContent || "").trim() && !busy) {
+          vanishNow(replyEl, stage, controls);
+        }
+      } else {
+        cancelVanish();
+      }
+      renderPast();
+    };
+  });
   input.focus();
   renderPast();
+}
+
+let vanishTimer = null;
+function cancelVanish() { if (vanishTimer) { clearTimeout(vanishTimer); vanishTimer = null; } }
+
+function scheduleVanish(replyEl, stage, controls) {
+  cancelVanish();
+  vanishTimer = setTimeout(() => vanishNow(replyEl, stage, controls), 5200);
+}
+
+async function vanishNow(replyEl, stage, controls) {
+  cancelVanish();
+  if (!replyEl || !stage) return;
+  const txt = replyEl.textContent || "";
+  if (controls) controls.innerHTML = "";
+  if (txt.trim()) await dissolveInk(replyEl, txt);
+  stage.hidden = true;
+  replyEl.innerHTML = "";
 }
 
 function modePlaceholder(mode) {
@@ -301,6 +345,7 @@ async function generateReply(text, isRegen = false) {
   if (busy) return;
   busy = true;
   lastPrompt = text;
+  cancelVanish();
 
   const stage = document.getElementById("replyStage");
   const replyEl = document.getElementById("archmageReply");
@@ -389,6 +434,11 @@ async function generateReply(text, isRegen = false) {
   busy = false;
   setInputsDisabled(false);
   if (input) input.focus();
+
+  // In Vanishing mode the page drinks the reply once you've had a moment to read it.
+  if (state.viewMode === "vanishing" && stored) {
+    scheduleVanish(replyEl, stage, controls);
+  }
 }
 
 function announceUnlocks(before, after) {
@@ -399,10 +449,15 @@ function announceUnlocks(before, after) {
 function renderPast() {
   const past = document.getElementById("past");
   if (!past) return;
+  // In Vanishing mode the page keeps no visible record — the diary stays closed.
+  if (state.viewMode === "vanishing") {
+    past.innerHTML = `<p class="vanish-note">🌫️ Vanishing mode — the page keeps no record. Your Aura and Chronicle are still safe.</p>`;
+    return;
+  }
   const entries = (state.entries || []).slice().reverse().slice(0, 12);
   if (!entries.length) { past.innerHTML = ""; return; }
   past.innerHTML = `
-    <h3 class="past-title">Past Inscriptions</h3>
+    <h3 class="past-title">The Diary</h3>
     <div class="past-list">
       ${entries.map((e) => `
         <article class="past-item">

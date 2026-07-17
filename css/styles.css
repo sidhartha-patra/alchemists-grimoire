@@ -196,6 +196,19 @@ a:hover { text-decoration: underline; }
   color: #1a120b; background: linear-gradient(180deg, var(--house-glow), var(--house-primary));
   border-color: transparent; box-shadow: 0 0 16px -3px var(--house-glow);
 }
+
+/* Diary vs Vanishing page-memory toggle */
+.diary-toggle { display: flex; align-items: center; gap: 8px; margin: -6px 0 16px; }
+.dt-label { font-family: var(--font-title); letter-spacing: 1.5px; text-transform: uppercase;
+  font-size: 0.6rem; color: var(--parchment); opacity: .55; }
+.vmode {
+  font-family: var(--font-title); font-size: 0.64rem; letter-spacing: 1px; text-transform: uppercase;
+  color: var(--parchment); background: transparent; border: 1px solid rgba(201,162,75,0.28);
+  border-radius: 999px; padding: 5px 12px; cursor: pointer; transition: all .18s;
+}
+.vmode:hover { border-color: var(--house-glow); color: var(--house-glow); }
+.vmode.active { color: #1a120b; background: var(--house-glow); border-color: transparent; }
+.vanish-note { margin-top: 28px; font-style: italic; opacity: .6; font-size: 0.9rem; text-align: center; }
 .field code {
   font-family: var(--font-title); font-size: 0.82rem; background: rgba(0,0,0,0.25);
   border: 1px solid rgba(201,162,75,0.3); border-radius: 5px; padding: 1px 6px; color: var(--gold-soft);
