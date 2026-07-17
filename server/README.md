@@ -80,6 +80,9 @@ Works with OpenAI, Azure OpenAI, GitHub Models, LM Studio, vLLM — anything tha
 
 - `GET  /health` → `{ ok, backend, model, endpoint, sessions, modes }`
 - `POST /api/archmage` → body `{ sessionId, message, house, mode }` → `{ reply, model, mode, source }`
+- `POST /api/archmage/stream` → same body; **Server-Sent Events** streaming tokens as
+  `data: {"delta":"…"}` lines, ending with `data: {"done":true,"full":"…"}`. The web app uses
+  this so the Archmage's quill writes in real time (first token in ~1s on a warm model).
 - `POST /api/session/reset` → body `{ sessionId }` → clears that session's memory
 
 ## Notes

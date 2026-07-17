@@ -90,3 +90,49 @@ export function typeQuill(target, text, opts = {}) {
     cancel() { cancelled = true; if (cursor.parentNode) cursor.remove(); body.textContent = clean; }
   };
 }
+
+// A live quill for STREAMING replies: push text deltas as they arrive and they
+// are typed out smoothly (decoupled from bursty network chunks), with a trailing
+// quill cursor. Call end(fullText) when the stream finishes.
+export function createQuillStream(target, opts = {}) {
+  const speed = opts.speed || 18;
+  target.innerHTML = "";
+  const body = document.createElement("span");
+  body.className = "quill-text";
+  const cursor = document.createElement("span");
+  cursor.className = "quill-cursor";
+  cursor.setAttribute("aria-hidden", "true");
+  target.appendChild(body);
+  target.appendChild(cursor);
+
+  let queue = [];
+  let done = false;
+  let pendingFull = null;
+  let resolveDone;
+  const finished = new Promise((r) => { resolveDone = r; });
+
+  function tick() {
+    if (queue.length) {
+      const ch = queue.shift();
+      body.appendChild(document.createTextNode(ch));
+      const pause = ".!?".includes(ch) ? speed * 8 : (",;:".includes(ch) ? speed * 3 : speed);
+      setTimeout(tick, pause);
+    } else if (done) {
+      // Reconcile against the authoritative final text, if provided.
+      if (pendingFull != null && body.textContent !== pendingFull) body.textContent = pendingFull;
+      if (cursor.parentNode) cursor.remove();
+      resolveDone();
+    } else {
+      setTimeout(tick, 40); // idle — await more deltas
+    }
+  }
+  setTimeout(tick, speed);
+
+  return {
+    push(text) { if (text) for (const ch of text) queue.push(ch); },
+    end(fullText) { pendingFull = (typeof fullText === "string" && fullText) ? fullText : null; done = true; },
+    cancel() { done = true; queue = []; if (cursor.parentNode) cursor.remove(); },
+    finished,
+    get text() { return body.textContent; }
+  };
+}

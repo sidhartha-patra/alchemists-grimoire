@@ -5,9 +5,9 @@ import { HOUSES, getHouse } from "./houses.js";
 import { QUESTIONS, scoreAffinity } from "./affinity.js";
 import { unlockedChapters, nextChapter, CHAPTERS } from "./chronicle.js";
 import * as store from "./storage.js";
-import { askArchmage, resetServerSession } from "./gemini.js";
+import { askArchmage, askArchmageStream, resetServerSession } from "./gemini.js";
 import { MODES, MODE_IDS } from "./persona.js";
-import { dissolveInk, typeQuill } from "./ink.js";
+import { dissolveInk, typeQuill, createQuillStream } from "./ink.js";
 
 const AURA_PER_ENTRY = 8;
 
@@ -291,15 +291,39 @@ async function inscribe() {
   stage.scrollIntoView({ behavior: "smooth", block: "center" });
 
   let result;
-  try {
-    result = await askArchmage(text, state, state.mode);
-  } catch (e) {
-    result = { text: "The echo wavers, and the page falls quiet a moment. Try once more.", source: "error" };
-  }
+  const usingServer = (state.serverUrl || "").trim();
 
-  replyEl.innerHTML = "";
-  const t = typeQuill(replyEl, result.text, { speed: 22 });
-  await t.promise;
+  if (usingServer) {
+    // Streaming path — tokens flow straight into a live quill as they arrive.
+    let streamer = null;
+    try {
+      result = await askArchmageStream(text, state, state.mode, (delta) => {
+        if (!streamer) { replyEl.innerHTML = ""; streamer = createQuillStream(replyEl, { speed: 16 }); }
+        streamer.push(delta);
+      });
+      if (streamer) { streamer.end(result && result.text); await streamer.finished; }
+      else { // server answered without deltas — type the whole reply
+        replyEl.innerHTML = "";
+        await typeQuill(replyEl, (result && result.text) || "", { speed: 22 }).promise;
+      }
+    } catch (e) {
+      if (streamer) streamer.cancel();
+      // Fall back to Gemini / offline without re-hitting the local server.
+      result = await askArchmage(text, { ...state, serverUrl: "" }, state.mode);
+      replyEl.innerHTML = "";
+      await typeQuill(replyEl, result.text, { speed: 22 }).promise;
+      toast("The stream faltered — the Echo finished the thought.", "warn");
+    }
+  } else {
+    // Non-streaming path (Gemini or offline are effectively instant).
+    try {
+      result = await askArchmage(text, state, state.mode);
+    } catch (e) {
+      result = { text: "The echo wavers, and the page falls quiet a moment. Try once more.", source: "error" };
+    }
+    replyEl.innerHTML = "";
+    await typeQuill(replyEl, result.text, { speed: 22 }).promise;
+  }
 
   if (result.source === "error") {
     toast("The bound familiar did not answer — the offline Echo spoke instead.", "warn");

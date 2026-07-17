@@ -69,6 +69,68 @@ async function completeOpenAI(messages) {
   return (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content || "").trim();
 }
 
+// --- streaming backend dispatch (token deltas via onDelta) -----------------
+
+async function streamComplete(messages, onDelta) {
+  return BACKEND === "openai" ? streamOpenAI(messages, onDelta) : streamOllama(messages, onDelta);
+}
+
+async function readLines(res, onLine) {
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let i;
+    while ((i = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, i).trim();
+      buf = buf.slice(i + 1);
+      if (line) onLine(line);
+    }
+  }
+  const last = buf.trim();
+  if (last) onLine(last);
+}
+
+async function streamOllama(messages, onDelta) {
+  const res = await fetch(`${OLLAMA_URL}/api/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model: MODEL, messages, stream: true, options: { temperature: TEMPERATURE } })
+  });
+  if (!res.ok) throw new Error(`Ollama ${res.status}: ${await res.text().catch(() => "")}`);
+  let full = "";
+  await readLines(res, (line) => {
+    let obj; try { obj = JSON.parse(line); } catch { return; }
+    const d = obj.message && obj.message.content || "";
+    if (d) { full += d; onDelta(d); }
+  });
+  return full;
+}
+
+async function streamOpenAI(messages, onDelta) {
+  const headers = { "Content-Type": "application/json" };
+  if (OPENAI_API_KEY) headers["Authorization"] = `Bearer ${OPENAI_API_KEY}`;
+  const res = await fetch(`${OPENAI_BASE_URL}/chat/completions`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ model: MODEL, messages, temperature: TEMPERATURE, stream: true })
+  });
+  if (!res.ok) throw new Error(`OpenAI-compat ${res.status}: ${await res.text().catch(() => "")}`);
+  let full = "";
+  await readLines(res, (line) => {
+    if (!line.startsWith("data:")) return;
+    const payload = line.slice(5).trim();
+    if (payload === "[DONE]") return;
+    let obj; try { obj = JSON.parse(payload); } catch { return; }
+    const d = obj.choices && obj.choices[0] && obj.choices[0].delta && obj.choices[0].delta.content || "";
+    if (d) { full += d; onDelta(d); }
+  });
+  return full;
+}
+
 // --- http plumbing ---------------------------------------------------------
 
 function cors(res) {
@@ -143,6 +205,49 @@ const server = http.createServer(async (req, res) => {
       console.error("archmage error:", e.message);
       return send(res, 502, { error: String(e.message || e) });
     }
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/archmage/stream") {
+    let payload;
+    try { payload = await readJson(req); }
+    catch { return send(res, 400, { error: "invalid JSON" }); }
+
+    const message = (payload.message || "").toString().trim();
+    if (!message) return send(res, 400, { error: "message is required" });
+
+    const house = payload.house || "ember";
+    const mode = MODE_IDS.includes(payload.mode) ? payload.mode : "chat";
+    const sess = getSession(payload.sessionId);
+    const messages = [
+      { role: "system", content: systemPromptFor(house, mode) },
+      ...sess.messages,
+      { role: "user", content: message }
+    ];
+
+    cors(res);
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      "Connection": "keep-alive"
+    });
+    const sse = (obj) => { try { res.write("data: " + JSON.stringify(obj) + "\n\n"); } catch (_) { /* client gone */ } };
+
+    try {
+      const full = await streamComplete(messages, (d) => sse({ delta: d }));
+      const clean = (full || "").trim();
+      if (clean) {
+        sess.messages.push({ role: "user", content: message }, { role: "assistant", content: clean });
+        if (sess.messages.length > MAX_HISTORY) sess.messages = sess.messages.slice(-MAX_HISTORY);
+        sess.updated = Date.now();
+      }
+      sse({ done: true, full: clean, model: MODEL, mode });
+      res.end();
+    } catch (e) {
+      console.error("stream error:", e.message);
+      sse({ error: String(e.message || e) });
+      res.end();
+    }
+    return;
   }
 
   send(res, 404, { error: "not found" });
