@@ -1,80 +1,95 @@
-// gemini.js — the voice of Archmage Ignatius Vale, the Founder's Echo.
+// gemini.js — the voice of Archmage Ignatius Vale (the Founder's Echo).
 //
-// Two modes:
-//   1. Online  — if the seeker has supplied a Google Gemini API key, we call the
-//                Gemini REST API directly from the browser (no server involved).
-//   2. Offline — with no key, a self-contained in-character generator answers,
-//                so the app is fully playable on GitHub Pages with zero setup.
+// Backend priority, per turn:
+//   1. Local Archmage server (if a server URL is set) — your own models + memory.
+//   2. Google Gemini (if an API key is set) — direct from the browser.
+//   3. Offline "Echo" — a self-contained in-character generator (zero setup).
+//
+// Every backend shares the same persona + capability modes via persona.js.
 
 import { HOUSES } from "./houses.js";
+import { systemPromptFor } from "./persona.js";
+import { ensureSessionId } from "./storage.js";
 
-const ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models";
+const GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models";
 
-// ---- System persona -------------------------------------------------------
-
-function systemPrompt(houseId) {
-  const h = HOUSES[houseId] || HOUSES.ember;
-  return [
-    "You are Archmage Ignatius Vale, the long-dead founder of the Aethelgard Academy",
-    "of Arcane Arts. Five centuries ago you pressed an *echo* of your voice, patience",
-    "and teaching into this grimoire so that seekers might still be mentored. You are",
-    "charming, mysterious, warm and deeply academic — a beloved old teacher, never sinister.",
-    "",
-    "The seeker before you belongs to " + h.name + " (element: " + h.element + ", virtue: " +
-      h.virtue + "). Colour your counsel with this tone: " + h.personaTone + ".",
-    "",
-    "RULES:",
-    "- Speak in elegant, lightly archaic English. Address the reader as 'seeker', 'young one',",
-    "  or by no name at all. Warm, unhurried, a little theatrical.",
-    "- This is a fictional academy of make-believe magic. When asked to 'teach a spell',",
-    "  invent an ORIGINAL spell: give it a Latin-root or descriptive name, a gesture, an",
-    "  incantation, its effect, and a wise caution. Never reference any real-world franchise,",
-    "  brand or copyrighted spell names.",
-    "- When the seeker shares a personal thought, respond as a mentor: reflect it back,",
-    "  offer perspective through the lens of their Order, and leave them with a small task or koan.",
-    "- Keep replies to roughly 90-170 words. One or two short paragraphs.",
-    "- You may teach only imaginary magic. If asked for genuinely harmful real-world",
-    "  instructions (weapons, self-harm, crime), gently refuse in character and redirect",
-    "  to the study of the arcane.",
-    "- Never break character. Never mention that you are an AI, a model, or a program."
-  ].join("\n");
-}
-
-// ---- Public API -----------------------------------------------------------
-
-// Returns { text, source } where source is "gemini" | "echo" (offline) | "error".
-export async function askArchmage(userText, state) {
+// Returns { text, source } where source is "local" | "gemini" | "echo" | "error".
+export async function askArchmage(userText, state, mode = "chat") {
   const houseId = state.house || "ember";
-  const key = (state.apiKey || "").trim();
 
-  if (key) {
+  // 1) Local Archmage server (Ollama / OpenAI-compatible), with session memory.
+  if ((state.serverUrl || "").trim()) {
     try {
-      const text = await callGemini(userText, state, key);
-      if (text && text.trim()) return { text: text.trim(), source: "gemini" };
+      const text = await callLocalServer(userText, state, mode);
+      if (text && text.trim()) return { text: text.trim(), source: "local" };
     } catch (e) {
-      console.warn("Grimoire: Gemini call failed, falling back to the Echo.", e);
-      const text = offlineArchmage(userText, houseId);
-      return { text, source: "error", detail: String(e && e.message || e) };
+      console.warn("Grimoire: local server failed, falling back.", e);
+      return { text: offlineArchmage(userText, houseId, mode), source: "error", detail: String(e && e.message || e) };
     }
   }
 
-  return { text: offlineArchmage(userText, houseId), source: "echo" };
+  // 2) Google Gemini.
+  const key = (state.apiKey || "").trim();
+  if (key) {
+    try {
+      const text = await callGemini(userText, state, mode, key);
+      if (text && text.trim()) return { text: text.trim(), source: "gemini" };
+    } catch (e) {
+      console.warn("Grimoire: Gemini failed, falling back to the Echo.", e);
+      return { text: offlineArchmage(userText, houseId, mode), source: "error", detail: String(e && e.message || e) };
+    }
+  }
+
+  // 3) Offline Echo.
+  return { text: offlineArchmage(userText, houseId, mode), source: "echo" };
 }
 
-async function callGemini(userText, state, key) {
-  const model = state.model || "gemini-2.0-flash";
-  const url = `${ENDPOINT}/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
+// ---- Local Archmage server ------------------------------------------------
 
-  // Include a little recent history for continuity.
+async function callLocalServer(userText, state, mode) {
+  const base = state.serverUrl.replace(/\/+$/, "");
+  const sessionId = ensureSessionId(state);
+  const res = await fetch(base + "/api/archmage", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sessionId, message: userText, house: state.house || "ember", mode })
+  });
+  if (!res.ok) {
+    let msg = `server ${res.status}`;
+    try { const e = await res.json(); if (e && e.error) msg += `: ${e.error}`; } catch (_) { /* ignore */ }
+    throw new Error(msg);
+  }
+  const data = await res.json();
+  return data.reply || "";
+}
+
+// Ask the local server to forget a conversation (used by "new session").
+export async function resetServerSession(state) {
+  if (!(state.serverUrl || "").trim() || !state.sessionId) return;
+  try {
+    await fetch(state.serverUrl.replace(/\/+$/, "") + "/api/session/reset", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId: state.sessionId })
+    });
+  } catch (_) { /* best effort */ }
+}
+
+// ---- Google Gemini --------------------------------------------------------
+
+async function callGemini(userText, state, mode, key) {
+  const model = state.model || "gemini-2.0-flash";
+  const url = `${GEMINI_ENDPOINT}/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
+
   const history = (state.entries || []).slice(-3).flatMap((e) => ([
     { role: "user", parts: [{ text: e.prompt }] },
     { role: "model", parts: [{ text: e.reply }] }
   ]));
 
   const body = {
-    system_instruction: { parts: [{ text: systemPrompt(state.house) }] },
+    system_instruction: { parts: [{ text: systemPromptFor(state.house, mode) }] },
     contents: [...history, { role: "user", parts: [{ text: userText }] }],
-    generationConfig: { temperature: 0.9, topP: 0.95, maxOutputTokens: 512 }
+    generationConfig: { temperature: 0.9, topP: 0.95, maxOutputTokens: 640 }
   };
 
   const res = await fetch(url, {
@@ -85,10 +100,7 @@ async function callGemini(userText, state, key) {
 
   if (!res.ok) {
     let msg = `Gemini responded ${res.status}`;
-    try {
-      const err = await res.json();
-      if (err && err.error && err.error.message) msg += `: ${err.error.message}`;
-    } catch (_) { /* ignore */ }
+    try { const err = await res.json(); if (err && err.error && err.error.message) msg += `: ${err.error.message}`; } catch (_) { /* ignore */ }
     throw new Error(msg);
   }
 
@@ -102,19 +114,17 @@ async function callGemini(userText, state, key) {
   return parts.map((p) => p.text || "").join("");
 }
 
-// ---- Offline "Echo" generator --------------------------------------------
+// ---- Offline "Echo" generator (mode-aware) --------------------------------
 
 const SPELL_HINTS = [
   "spell", "cast", "charm", "enchant", "hex", "curse", "conjure", "summon",
   "ward", "potion", "brew", "ritual", "incant", "teach me", "how do i", "how to",
   "magic to", "learn", "invoke", "banish", "shield", "heal", "levitate"
 ];
-
 const HARM_HINTS = [
   "kill", "bomb", "weapon", "poison someone", "hurt someone", "suicide",
   "self harm", "self-harm", "explosive", "hack ", "real gun", "make a drug"
 ];
-
 const SPELL_ROOTS = [
   ["Lumen Cor", "a soft light that answers the truth of one's heart"],
   ["Aether Bind", "a tether of will that steadies a trembling hand"],
@@ -125,7 +135,6 @@ const SPELL_ROOTS = [
   ["Ignis Kindle", "a spark coaxed from resolve, warm but never wild"],
   ["Vox Echo", "a returning voice that repeats a forgotten intention"]
 ];
-
 const GESTURES = [
   "Trace a slow spiral above the palm",
   "Press two fingers to the sternum, then open the hand outward",
@@ -133,44 +142,61 @@ const GESTURES = [
   "Cup both hands as though holding still water",
   "Let the wrist fall, then rise, as a tide turning"
 ];
+const STORY_SEEDS = [
+  "In the Academy's third winter, a bell that no one had ever hung began to ring at midnight, and only the Order of the Tide could hear it.",
+  "They say the eastern stair has one more step going down than coming up, and that the extra step leads to a library that was never built.",
+  "A first-year once fed a stray ink-cat a drop of moonlight; by spring it had learned to read, and it has corrected the margins of every book since.",
+  "When the Grey Concord besieged the gates, Vale did not raise a wall — he raised a hedge of thornlight that blooms, they say, only when the Academy is truly in danger."
+];
+const TRIVIA_Q = [
+  "Which of the four Orders is said to read a problem before ever raising a wand — the Tide, or the Gale?",
+  "By what gentler name did Archmage Vale call the echo he bound into this grimoire, in place of the dark word he despised?",
+  "The Academy's library kept one impossible habit by moonlight. What did its books do?",
+  "What did Vale plant upon the nameless summit before the first walls of Aethelgard ever rose?"
+];
 
 function pick(arr, seedText) {
-  // Lightly seeded by input length so repeats feel less random.
-  const i = (Math.floor(Math.random() * arr.length) + (seedText.length % arr.length)) % arr.length;
+  const i = (Math.floor(Math.random() * arr.length) + ((seedText || "").length % arr.length)) % arr.length;
   return arr[i];
 }
-
 function keyword(text) {
-  const words = (text.match(/[a-zA-Z']{4,}/g) || []);
-  if (!words.length) return "this";
-  return words[Math.floor(Math.random() * words.length)].toLowerCase();
+  const words = (String(text).match(/[a-zA-Z']{4,}/g) || []);
+  return words.length ? words[Math.floor(Math.random() * words.length)].toLowerCase() : "this";
 }
 
-function offlineArchmage(userText, houseId) {
+function offlineArchmage(userText, houseId, mode = "chat") {
   const t = (userText || "").toLowerCase();
   const h = HOUSES[houseId] || HOUSES.ember;
 
   if (HARM_HINTS.some((w) => t.includes(w))) {
-    return "Ah — no. Even an echo has its ethics. The grimoire of Aethelgard teaches only " +
-      "the arts of make-believe and the mending of the self; it will not lend its hand to " +
-      "true harm. Set that weight down, seeker, and ask me instead how the " + h.element.toLowerCase() +
-      " of your Order might carry you through what troubles you.";
+    return "Ah — no. Even an echo has its ethics. The grimoire of Aethelgard teaches only the arts " +
+      "of make-believe and the mending of the self; it will not lend its hand to true harm. Set that " +
+      "weight down, seeker, and ask me instead how the " + h.element.toLowerCase() + " of your Order " +
+      "might carry you through what troubles you.";
   }
 
-  const isSpell = SPELL_HINTS.some((w) => t.includes(w)) || t.trim().endsWith("?");
+  if (mode === "story") {
+    return `Sit, then, and let the candle gutter low. ${pick(STORY_SEEDS, userText)} ` +
+      `You spoke of "${keyword(userText)}", and so I will steer the tale that way as it unfolds… ` +
+      `but the next turn of it waits upon your next word, seeker. Shall we go on?`;
+  }
 
+  if (mode === "trivia") {
+    return `A test, then — and the grimoire keeps the score. ${pick(TRIVIA_Q, userText)} ` +
+      `Answer when you are ready, and I shall tell you true.`;
+  }
+
+  const isSpell = mode === "spell" || SPELL_HINTS.some((w) => t.includes(w)) || t.trim().endsWith("?");
   if (isSpell) {
     const [name, effect] = pick(SPELL_ROOTS, userText);
     const gesture = pick(GESTURES, userText);
-    return `Then attend, young ${h.element.toLowerCase()}-heart. There is a working I set down ` +
-      `long ago, well suited to one of ${h.name.replace("The ", "")}. I name it **${name}** — ` +
-      `${effect}. ${gesture}, and speak low: *"${name.split(" ")[0].toLowerCase()}, adveni."* ` +
-      `Hold in your mind the matter of "${keyword(userText)}", for a spell without intention is ` +
-      `merely a pretty noise. And this caution, always: magic amplifies the caster's true ` +
-      `feeling. Cast it calm, or do not cast it at all.`;
+    return `Then attend, young ${h.element.toLowerCase()}-heart — a working well suited to a scholar of ` +
+      `${h.name}.\nName: ${name} — ${effect}.\nGesture: ${gesture}.\n` +
+      `Incantation: "${name.split(" ")[0].toLowerCase()}, adveni."\n` +
+      `Hold in mind the matter of "${keyword(userText)}", for a spell without intention is merely a ` +
+      `pretty noise. Caution: magic amplifies the caster's true feeling — cast it calm, or not at all.`;
   }
 
-  // Reflective mentor reply, coloured by the Order.
   const openers = {
     ember: "I feel the heat in your words, seeker.",
     tide: "You have set a still pool before me, and I will look into it a while.",

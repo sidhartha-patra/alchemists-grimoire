@@ -11,7 +11,10 @@ const DEFAULT_STATE = {
   seenChapters: [],      // chapter ids the seeker has already been shown
   entries: [],           // { ts, prompt, reply, house } — capped, most-recent last
   apiKey: "",
-  model: "gemini-2.0-flash"
+  model: "gemini-2.0-flash",
+  serverUrl: "",         // optional local Archmage server, e.g. http://localhost:8787
+  sessionId: "",         // stable id for server-side conversation memory
+  mode: "chat"           // wizard capability: chat | spell | story | trivia
 };
 
 const MAX_ENTRIES = 60;
@@ -53,4 +56,14 @@ export function reset() {
 export function addEntry(state, prompt, reply) {
   const entries = [...(state.entries || []), { ts: Date.now(), prompt, reply, house: state.house }];
   return { ...state, entries: entries.slice(-MAX_ENTRIES) };
+}
+
+// Lazily create a stable session id used for server-side conversation memory.
+export function ensureSessionId(state) {
+  if (!state.sessionId) {
+    state.sessionId = (typeof crypto !== "undefined" && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : "sess-" + Date.now() + "-" + Math.random().toString(16).slice(2);
+  }
+  return state.sessionId;
 }

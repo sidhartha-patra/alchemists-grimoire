@@ -36,15 +36,21 @@ alchemists-grimoire/
 │  ├─ houses.js            # the four elemental Orders (data + SVG sigils)
 │  ├─ affinity.js          # the Sorting Ritual questions + scoring
 │  ├─ chronicle.js         # unlockable history chapters
-│  ├─ gemini.js            # Gemini client + offline "Echo" persona
+│  ├─ persona.js           # Archmage persona + capability modes (shared client/server)
+│  ├─ gemini.js            # backend router: local server → Gemini → offline Echo
 │  ├─ ink.js               # ink-dissolve + quill-typing animations
-│  └─ storage.js           # localStorage persistence
+│  └─ storage.js           # localStorage persistence + session id
+├─ server/                 # optional local wizard-AI server (zero-dep Node)
+│  ├─ archmage-server.mjs  # Ollama / OpenAI-compatible, session memory, modes
+│  ├─ package.json
+│  └─ README.md
 ├─ .github/workflows/pages.yml   # auto-deploy to GitHub Pages
 ├─ .nojekyll               # serve files as-is
 └─ LICENSE                 # MIT
 ```
 
-Pure HTML/CSS/vanilla-JS ES modules — **no build step, no dependencies to install.**
+The web app is pure HTML/CSS/vanilla-JS ES modules — **no build step.** The optional
+`server/` is a single Node file with **no npm install** required.
 
 ---
 
@@ -101,6 +107,36 @@ npx serve .
 ```
 
 Then visit `http://localhost:8080`.
+
+---
+
+## 🔮 Give the Archmage a real brain — the local AI server (recommended)
+
+The bundled **Archmage server** (`server/`) powers the wizard with a real model, **per-session
+memory**, and four capabilities you pick in the Journal: **Talk · Learn a Spell · Hear a Tale ·
+Test Me (trivia)**. It's **zero-dependency** and uses models you already have via
+[Ollama](https://ollama.com) (or any OpenAI-compatible endpoint).
+
+```powershell
+cd C:\Users\sipatra\AlchemistsGrimoire\server
+node archmage-server.mjs                 # default: Ollama, llama3.1:8b
+# quality upgrade for roleplay (pull once): 
+#   ollama pull glm-5.2;  $env:MODEL="glm-5.2"; node archmage-server.mjs
+```
+
+Then in the app: **Settings → The Scriptorium → Local Archmage server** = `http://localhost:8787`
+→ **Save**. The Journal's mode buttons now drive your local model, and the Archmage remembers the
+conversation (continuing a story, judging your last trivia answer) until you **Begin a new session**.
+
+- Works from `http://localhost` *and* the public Pages site (browsers allow `https://…` → `http://localhost`).
+- Any hosted model too: `BACKEND=openai OPENAI_BASE_URL=… OPENAI_API_KEY=… MODEL=…` (OpenAI, Azure
+  OpenAI, GitHub Models, LM Studio, vLLM). The key stays on the server, never in the browser.
+- Full details, env vars and API: **[`server/README.md`](server/README.md)**.
+
+> **Model tip:** `llama3.1:8b` is a fine default (though a turn can take a while on CPU).
+> `glm-5.2` and `qwen2.5:32b` give richer, more in-character prose at higher cost/VRAM.
+
+**Backend priority:** local server (if set) → Gemini (if key set) → offline Echo.
 
 ---
 

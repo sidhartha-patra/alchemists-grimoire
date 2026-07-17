@@ -177,6 +177,29 @@ a:hover { text-decoration: underline; }
 .journal-head { display: flex; align-items: center; gap: 14px; margin-bottom: 22px; }
 .journal-head h2 { font-family: var(--font-title); margin: 0; color: var(--house-glow); font-size: 1.5rem; }
 .journal-sub { margin: 2px 0 0; color: var(--parchment); opacity: .8; font-style: italic; }
+.brain-chip {
+  display: inline-block; margin-left: 6px; font-style: normal; font-family: var(--font-title);
+  font-size: 0.62rem; letter-spacing: 1px; text-transform: uppercase; color: var(--house-glow);
+  border: 1px solid rgba(201,162,75,0.4); border-radius: 999px; padding: 2px 9px; vertical-align: 1px;
+}
+
+/* Wizard capability selector */
+.mode-bar { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 16px; }
+.mode {
+  font-family: var(--font-title); font-size: 0.72rem; letter-spacing: 1.2px; text-transform: uppercase;
+  color: var(--parchment); background: rgba(239,227,198,0.05);
+  border: 1px solid rgba(201,162,75,0.3); border-radius: 999px; padding: 8px 16px; cursor: pointer;
+  transition: all .18s;
+}
+.mode:hover { border-color: var(--house-glow); color: var(--house-glow); }
+.mode.active {
+  color: #1a120b; background: linear-gradient(180deg, var(--house-glow), var(--house-primary));
+  border-color: transparent; box-shadow: 0 0 16px -3px var(--house-glow);
+}
+.field code {
+  font-family: var(--font-title); font-size: 0.82rem; background: rgba(0,0,0,0.25);
+  border: 1px solid rgba(201,162,75,0.3); border-radius: 5px; padding: 1px 6px; color: var(--gold-soft);
+}
 
 .ink-well { position: relative; }
 .ink-input, .ink-ghost {

@@ -1,0 +1,13 @@
+{
+  "name": "aethelgard-archmage-server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Local wizard-AI server for The Alchemist's Grimoire — session memory + modes, powered by Ollama or any OpenAI-compatible endpoint. Zero dependencies.",
+  "scripts": {
+    "start": "node archmage-server.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

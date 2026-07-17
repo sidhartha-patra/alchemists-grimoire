@@ -5,7 +5,8 @@ import { HOUSES, getHouse } from "./houses.js";
 import { QUESTIONS, scoreAffinity } from "./affinity.js";
 import { unlockedChapters, nextChapter, CHAPTERS } from "./chronicle.js";
 import * as store from "./storage.js";
-import { askArchmage } from "./gemini.js";
+import { askArchmage, resetServerSession } from "./gemini.js";
+import { MODES, MODE_IDS } from "./persona.js";
 import { dissolveInk, typeQuill } from "./ink.js";
 
 const AURA_PER_ENTRY = 8;
@@ -190,6 +191,7 @@ function viewJournal() {
   if (!state.onboarded || !state.house) return go("#/ritual");
   applyTheme(state.house);
   const h = getHouse(state.house);
+  if (!MODE_IDS.includes(state.mode)) state.mode = "chat";
 
   $view.innerHTML = `
     <section class="journal fade-in">
@@ -198,14 +200,20 @@ function viewJournal() {
         <div>
           <h2>The Echo Journal</h2>
           <p class="journal-sub">Archmage Ignatius Vale attends a scholar of
-            ${esc(h.name.replace("The ", ""))}.</p>
+            ${esc(h.name.replace("The ", ""))}. <span class="brain-chip">${brainLabel()}</span></p>
         </div>
       </header>
+
+      <div class="mode-bar" role="tablist" aria-label="Wizard capability">
+        ${MODE_IDS.map((m) =>
+          `<button class="mode ${state.mode === m ? "active" : ""}" data-mode="${m}"
+             title="${esc(MODES[m].hint)}">${esc(MODES[m].label)}</button>`).join("")}
+      </div>
 
       <div class="ink-well">
         <div class="ink-ghost" id="inkGhost" aria-hidden="true"></div>
         <textarea id="inkInput" class="ink-input" rows="4"
-          placeholder="Write a spell query, or simply a thought, upon the page…"
+          placeholder="${esc(modePlaceholder(state.mode))}"
           aria-label="Write in the grimoire"></textarea>
         <div class="ink-actions">
           <span class="hint">Tip: <kbd>Ctrl</kbd>+<kbd>Enter</kbd> to inscribe</span>
@@ -227,8 +235,32 @@ function viewJournal() {
   input.addEventListener("keydown", (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); inscribe(); }
   });
+  $view.querySelectorAll(".mode").forEach((b) => {
+    b.onclick = () => {
+      if (busy) return;
+      state.mode = b.dataset.mode; persist();
+      $view.querySelectorAll(".mode").forEach((x) => x.classList.toggle("active", x.dataset.mode === state.mode));
+      input.placeholder = modePlaceholder(state.mode);
+      input.focus();
+    };
+  });
   input.focus();
   renderPast();
+}
+
+function modePlaceholder(mode) {
+  return ({
+    chat:   "Write a thought, a worry, or a question upon the page…",
+    spell:  "Name what you wish to achieve — the Archmage will devise a working…",
+    story:  "Ask for a tale, or write a word to continue the one unfolding…",
+    trivia: "Write 'begin' for a question — or inscribe your answer to the last…"
+  })[mode] || "Write upon the page…";
+}
+
+function brainLabel() {
+  if ((state.serverUrl || "").trim()) return "🜂 Local model";
+  if ((state.apiKey || "").trim()) return "✦ Gemini";
+  return "◦ Offline Echo";
 }
 
 let busy = false;
@@ -260,7 +292,7 @@ async function inscribe() {
 
   let result;
   try {
-    result = await askArchmage(text, state);
+    result = await askArchmage(text, state, state.mode);
   } catch (e) {
     result = { text: "The echo wavers, and the page falls quiet a moment. Try once more.", source: "error" };
   }
@@ -270,7 +302,7 @@ async function inscribe() {
   await t.promise;
 
   if (result.source === "error") {
-    toast("Could not reach Gemini — the offline Echo answered instead.", "warn");
+    toast("The bound familiar did not answer — the offline Echo spoke instead.", "warn");
   }
 
   // 3) Reward, record, and check for newly-revealed history.
@@ -367,8 +399,18 @@ function viewSettings() {
   $view.innerHTML = `
     <section class="settings fade-in">
       <h2>The Scriptorium</h2>
-      <p class="settings-sub">Bind a true familiar of intellect to the grimoire — or let the
-        offline Echo speak. Nothing here ever leaves your browser.</p>
+      <p class="settings-sub">Give the Archmage a real mind — a private local model, or Google
+        Gemini — or let the offline Echo speak. Nothing here ever leaves your browser (a local
+        server's key stays on the server).</p>
+
+      <div class="field">
+        <label for="serverUrl">Local Archmage server <span class="opt">(recommended — your own models)</span></label>
+        <input type="text" id="serverUrl" placeholder="http://localhost:8787" value="${esc(state.serverUrl || "")}"
+          autocomplete="off" spellcheck="false" inputmode="url" />
+        <p class="field-help">Run <code>node server/archmage-server.mjs</code> (see <code>server/README.md</code>)
+          to power the wizard with Ollama or any OpenAI-compatible model, with real per-session memory.
+          Takes priority over Gemini when set. Leave blank to use Gemini or the offline Echo.</p>
+      </div>
 
       <div class="field">
         <label for="apiKey">Google Gemini API key <span class="opt">(optional)</span></label>
@@ -376,11 +418,11 @@ function viewSettings() {
           autocomplete="off" spellcheck="false" />
         <p class="field-help">Create a free key at
           <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener">Google AI Studio</a>.
-          Stored only in this browser's localStorage. Leave blank to play with the built-in Echo.</p>
+          Stored only in this browser's localStorage. Used when no local server is set.</p>
       </div>
 
       <div class="field">
-        <label for="model">Model</label>
+        <label for="model">Gemini model</label>
         <select id="model">
           ${["gemini-2.0-flash","gemini-2.0-flash-lite","gemini-1.5-flash","gemini-1.5-pro"]
             .map((m) => `<option value="${m}" ${state.model === m ? "selected" : ""}>${m}</option>`).join("")}
@@ -390,6 +432,7 @@ function viewSettings() {
       <div class="settings-actions">
         <button class="btn primary" id="saveBtn">Save the binding</button>
         <button class="btn ghost" id="testBtn">Test the connection</button>
+        <button class="btn ghost" id="newSessionBtn">Begin a new session</button>
       </div>
 
       <hr class="rule"/>
@@ -411,12 +454,23 @@ function viewSettings() {
     </section>`;
 
   document.getElementById("saveBtn").onclick = () => {
+    state.serverUrl = document.getElementById("serverUrl").value.trim().replace(/\/+$/, "");
     state.apiKey = document.getElementById("apiKey").value.trim();
     state.model = document.getElementById("model").value;
     persist();
-    toast(state.apiKey ? "A familiar is bound. The Archmage's voice deepens." : "Saved. The offline Echo will speak.", "good");
+    renderNav();
+    const brain = state.serverUrl ? "A local familiar answers now." :
+      (state.apiKey ? "Gemini is bound. The Archmage's voice deepens." : "Saved. The offline Echo will speak.");
+    toast(brain, "good");
   };
   document.getElementById("testBtn").onclick = testConnection;
+  document.getElementById("newSessionBtn").onclick = async () => {
+    await resetServerSession(state);
+    state.sessionId = "";
+    store.ensureSessionId(state);
+    persist();
+    toast("A new session begins — the Archmage's memory is fresh.", "good");
+  };
   document.getElementById("retakeBtn").onclick = () => go("#/ritual");
   document.getElementById("resetBtn").onclick = () => {
     if (confirm("Truly forget everything and begin anew?")) {
@@ -430,13 +484,15 @@ function viewSettings() {
 }
 
 async function testConnection() {
+  const serverUrl = document.getElementById("serverUrl").value.trim().replace(/\/+$/, "");
   const key = document.getElementById("apiKey").value.trim();
-  if (!key) { toast("No key set — the offline Echo needs no binding.", "warn"); return; }
+  if (!serverUrl && !key) { toast("Nothing to test — the offline Echo needs no binding.", "warn"); return; }
   toast("Reaching for the familiar…");
-  const probe = { ...state, apiKey: key, model: document.getElementById("model").value, entries: [] };
-  const res = await askArchmage("Greet me in a single short sentence.", probe);
-  if (res.source === "gemini") toast("The familiar answers. Binding is sound.", "good");
-  else toast("The familiar did not answer — check the key/model.", "warn");
+  const probe = { ...state, serverUrl, apiKey: key, model: document.getElementById("model").value, entries: [], sessionId: "probe-" + Date.now() };
+  const res = await askArchmage("Greet me in a single short sentence.", probe, "chat");
+  if (res.source === "local") toast("The local model answers. Binding is sound.", "good");
+  else if (res.source === "gemini") toast("Gemini answers. Binding is sound.", "good");
+  else toast("The familiar did not answer — check the URL/key. " + (res.detail ? "(" + res.detail + ")" : ""), "warn");
 }
 
 // -------------------------------------------------------------------- router
