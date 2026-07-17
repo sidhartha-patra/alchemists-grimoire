@@ -1,0 +1,11 @@
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.log
+.idea/
+.vscode/
+
+# Local secrets — never commit an API key.
+# The app stores the Gemini key in the browser's localStorage only.
+secrets.js
+*.local
