@@ -27,6 +27,10 @@ jobs:
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
+        with:
+          # Auto-enable Pages (source = GitHub Actions) on first run so no
+          # manual Settings toggle is needed, even on a fresh repo or a fork.
+          enablement: true
 
       - name: Upload site artifact
         uses: actions/upload-pages-artifact@v3
