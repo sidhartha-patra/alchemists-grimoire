@@ -6,7 +6,7 @@ Pass the **Affinity Ritual**, be sorted into one of four elemental **Orders**, a
 
 > A fully **original** work of interactive fiction. Every name, house, spell and character is invented for this project — no relation to any existing book, film or game franchise.
 
-🔮 **Live demo:** once deployed, your app will be at `https://<your-username>.github.io/alchemists-grimoire/`
+🔮 **Live demo:** once deployed, your app will be at **https://sidhartha-patra.github.io/alchemists-grimoire/**
 
 ---
 
@@ -50,25 +50,28 @@ Pure HTML/CSS/vanilla-JS ES modules — **no build step, no dependencies to inst
 
 ## 🚀 Deploy to *your personal* GitHub + GitHub Pages
 
-This project was built locally and is ready to publish. Run these from the project folder
-(`C:\Users\sipatra\AlchemistsGrimoire`) using **your personal GitHub account**.
+This project was built locally and is ready to publish. The `origin` remote is already
+set to **`https://github.com/sidhartha-patra/alchemists-grimoire.git`**, so publishing is
+two steps once you're logged into your personal account.
 
 ### Option A — GitHub CLI (fastest)
 
 ```powershell
-# 1. Log in with your PERSONAL account (opens a browser)
+cd C:\Users\sipatra\AlchemistsGrimoire
+
+# 1. Log in with your PERSONAL account (sidhartha-patra) — opens a browser
 gh auth login
 
-# 2. Create the repo under your personal account and push
-gh repo create alchemists-grimoire --public --source=. --remote=origin --push
+# 2. Create the empty repo on your account, then push (origin is already configured)
+gh repo create sidhartha-patra/alchemists-grimoire --public
+git push -u origin main
 ```
 
 ### Option B — plain git + the website
 
 ```powershell
-# Create an empty repo named "alchemists-grimoire" on github.com first, then:
-git remote add origin https://github.com/<your-username>/alchemists-grimoire.git
-git branch -M main
+# Create an empty repo named "alchemists-grimoire" under sidhartha-patra on github.com, then:
+cd C:\Users\sipatra\AlchemistsGrimoire
 git push -u origin main
 ```
 
@@ -79,7 +82,7 @@ The included workflow (`.github/workflows/pages.yml`) deploys automatically. Jus
 1. Repo → **Settings → Pages**
 2. Under **Build and deployment → Source**, choose **GitHub Actions**.
 3. Push (or re-run the workflow). Your site goes live at
-   `https://<your-username>.github.io/alchemists-grimoire/`.
+   **https://sidhartha-patra.github.io/alchemists-grimoire/**.
 
 > Prefer no Actions? You can instead set **Source → Deploy from a branch → `main` / root**.
 > The `.nojekyll` file ensures the `js/` modules are served correctly.
