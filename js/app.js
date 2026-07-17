@@ -222,8 +222,12 @@ function viewJournal() {
       </div>
 
       <div class="reply-stage" id="replyStage" hidden>
-        <div class="reply-attrib">${sigilSvg(state.house, 22)}<span>The Founder's Echo replies</span></div>
+        <div class="reply-attrib">
+          ${sigilSvg(state.house, 22)}<span>The Founder's Echo replies</span>
+          <span class="stream-flag" id="streamFlag" hidden><i></i>streaming</span>
+        </div>
         <div class="archmage" id="archmageReply"></div>
+        <div class="reply-controls" id="replyControls"></div>
       </div>
 
       <div class="past" id="past"></div>
@@ -264,30 +268,51 @@ function brainLabel() {
 }
 
 let busy = false;
+let currentAbort = null;   // AbortController for an in-flight stream
+let lastPrompt = null;     // the prompt to re-run on "Regenerate"
 
 async function inscribe() {
   if (busy) return;
   const input = document.getElementById("inkInput");
   const ghost = document.getElementById("inkGhost");
-  const stage = document.getElementById("replyStage");
-  const replyEl = document.getElementById("archmageReply");
-  const btn = document.getElementById("inscribeBtn");
   const text = (input.value || "").trim();
   if (!text) { toast("The page cannot drink an empty thought."); return; }
 
-  busy = true;
-  btn.disabled = true;
+  // The page drinks the seeker's ink, then the Echo answers.
   input.disabled = true;
-
-  // 1) The page drinks the seeker's ink.
   ghost.style.display = "block";
   await dissolveInk(ghost, text);
   ghost.style.display = "none";
   input.value = "";
 
-  // 2) The Echo stirs, then writes back in a quill hand.
+  await generateReply(text, false);
+}
+
+function setInputsDisabled(disabled) {
+  const btn = document.getElementById("inscribeBtn");
+  const input = document.getElementById("inkInput");
+  if (btn) btn.disabled = disabled;
+  if (input) input.disabled = disabled;
+  $view.querySelectorAll(".mode").forEach((m) => { m.disabled = disabled; });
+}
+
+// Runs one Archmage turn. isRegen=true replaces the last entry (no extra Aura).
+async function generateReply(text, isRegen = false) {
+  if (busy) return;
+  busy = true;
+  lastPrompt = text;
+
+  const stage = document.getElementById("replyStage");
+  const replyEl = document.getElementById("archmageReply");
+  const controls = document.getElementById("replyControls");
+  const flag = document.getElementById("streamFlag");
+  const input = document.getElementById("inkInput");
+  setInputsDisabled(true);
+
   stage.hidden = false;
   replyEl.innerHTML = `<span class="stir">the ink stirs<span class="dots"></span></span>`;
+  if (controls) controls.innerHTML = "";
+  if (flag) flag.hidden = true;
   stage.scrollIntoView({ behavior: "smooth", block: "center" });
 
   let result;
@@ -296,16 +321,22 @@ async function inscribe() {
   if (usingServer) {
     // Streaming path — tokens flow straight into a live quill as they arrive.
     let streamer = null;
+    currentAbort = new AbortController();
+    if (controls) {
+      controls.innerHTML = `<button class="btn small ghost" id="stopBtn">&#9632; Stop writing</button>`;
+      document.getElementById("stopBtn").onclick = () => { if (currentAbort) currentAbort.abort(); };
+    }
     try {
       result = await askArchmageStream(text, state, state.mode, (delta) => {
-        if (!streamer) { replyEl.innerHTML = ""; streamer = createQuillStream(replyEl, { speed: 16 }); }
+        if (!streamer) {
+          replyEl.innerHTML = "";
+          streamer = createQuillStream(replyEl, { speed: 16 });
+          if (flag) flag.hidden = false;
+        }
         streamer.push(delta);
-      });
+      }, currentAbort.signal);
       if (streamer) { streamer.end(result && result.text); await streamer.finished; }
-      else { // server answered without deltas — type the whole reply
-        replyEl.innerHTML = "";
-        await typeQuill(replyEl, (result && result.text) || "", { speed: 22 }).promise;
-      }
+      else { replyEl.innerHTML = ""; await typeQuill(replyEl, (result && result.text) || "", { speed: 22 }).promise; }
     } catch (e) {
       if (streamer) streamer.cancel();
       // Fall back to Gemini / offline without re-hitting the local server.
@@ -313,9 +344,11 @@ async function inscribe() {
       replyEl.innerHTML = "";
       await typeQuill(replyEl, result.text, { speed: 22 }).promise;
       toast("The stream faltered — the Echo finished the thought.", "warn");
+    } finally {
+      currentAbort = null;
+      if (flag) flag.hidden = true;
     }
   } else {
-    // Non-streaming path (Gemini or offline are effectively instant).
     try {
       result = await askArchmage(text, state, state.mode);
     } catch (e) {
@@ -328,20 +361,34 @@ async function inscribe() {
   if (result.source === "error") {
     toast("The bound familiar did not answer — the offline Echo spoke instead.", "warn");
   }
+  if (result.aborted) toast("Stopped — the Archmage set down his quill.", "warn");
 
-  // 3) Reward, record, and check for newly-revealed history.
-  const before = state.aura;
-  state.aura += AURA_PER_ENTRY;
-  state = store.addEntry(state, text, result.text);
-  persist();
-  renderNav();
-  announceUnlocks(before, state.aura);
-  renderPast();
+  // Record + reward (only if something was actually written).
+  const stored = (result.text || "").trim();
+  if (stored) {
+    if (isRegen && state.entries && state.entries.length) {
+      state.entries[state.entries.length - 1] = { ts: Date.now(), prompt: text, reply: stored, house: state.house };
+      persist();
+    } else if (!isRegen) {
+      const before = state.aura;
+      state.aura += AURA_PER_ENTRY;
+      state = store.addEntry(state, text, stored);
+      persist();
+      renderNav();
+      announceUnlocks(before, state.aura);
+    }
+    renderPast();
+  }
+
+  // Offer to regenerate the same prompt.
+  if (controls) {
+    controls.innerHTML = `<button class="btn small ghost" id="regenBtn">&#8635; Regenerate</button>`;
+    document.getElementById("regenBtn").onclick = () => { if (!busy) generateReply(lastPrompt, true); };
+  }
 
   busy = false;
-  btn.disabled = false;
-  input.disabled = false;
-  input.focus();
+  setInputsDisabled(false);
+  if (input) input.focus();
 }
 
 function announceUnlocks(before, after) {

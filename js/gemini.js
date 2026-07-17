@@ -79,7 +79,7 @@ export async function resetServerSession(state) {
 // Calls onDelta(textChunk) as tokens arrive. Returns { text, source:"local" }.
 // Returns null if no local server is configured (caller should use askArchmage).
 // Throws if the stream fails, so the caller can fall back gracefully.
-export async function askArchmageStream(userText, state, mode, onDelta) {
+export async function askArchmageStream(userText, state, mode, onDelta, signal) {
   if (!(state.serverUrl || "").trim()) return null;
   const base = state.serverUrl.replace(/\/+$/, "");
   const sessionId = ensureSessionId(state);
@@ -87,7 +87,8 @@ export async function askArchmageStream(userText, state, mode, onDelta) {
   const res = await fetch(base + "/api/archmage/stream", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ sessionId, message: userText, house: state.house || "ember", mode })
+    body: JSON.stringify({ sessionId, message: userText, house: state.house || "ember", mode }),
+    signal
   });
   if (!res.ok || !res.body) {
     let msg = `server ${res.status}`;
@@ -97,24 +98,30 @@ export async function askArchmageStream(userText, state, mode, onDelta) {
 
   const reader = res.body.getReader();
   const dec = new TextDecoder();
-  let buf = "", full = "", errored = null;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += dec.decode(value, { stream: true });
-    let i;
-    while ((i = buf.indexOf("\n\n")) >= 0) {
-      const line = buf.slice(0, i).trim();
-      buf = buf.slice(i + 2);
-      if (!line.startsWith("data:")) continue;
-      let obj; try { obj = JSON.parse(line.slice(5).trim()); } catch { continue; }
-      if (obj.delta) { full += obj.delta; if (onDelta) onDelta(obj.delta); }
-      else if (obj.error) { errored = obj.error; }
-      else if (obj.done && typeof obj.full === "string" && obj.full) { full = obj.full; }
+  let buf = "", full = "", errored = null, aborted = false;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let i;
+      while ((i = buf.indexOf("\n\n")) >= 0) {
+        const line = buf.slice(0, i).trim();
+        buf = buf.slice(i + 2);
+        if (!line.startsWith("data:")) continue;
+        let obj; try { obj = JSON.parse(line.slice(5).trim()); } catch { continue; }
+        if (obj.delta) { full += obj.delta; if (onDelta) onDelta(obj.delta); }
+        else if (obj.error) { errored = obj.error; }
+        else if (obj.done && typeof obj.full === "string" && obj.full) { full = obj.full; }
+      }
     }
+  } catch (e) {
+    // A deliberate Stop (AbortController) keeps whatever was written so far.
+    if ((signal && signal.aborted) || (e && e.name === "AbortError")) aborted = true;
+    else throw e;
   }
   if (errored) throw new Error(errored);
-  return { text: full.trim(), source: "local" };
+  return { text: full.trim(), source: "local", aborted };
 }
 
 // ---- Google Gemini --------------------------------------------------------
