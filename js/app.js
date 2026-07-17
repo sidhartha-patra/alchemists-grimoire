@@ -218,32 +218,26 @@ function viewJournal() {
           title="The page drinks each reply after you read it">&#127787; Vanishing</button>
       </div>
 
-      <div class="ink-well">
+      <div class="ink-well" id="inkWell">
         <div class="ink-ghost" id="inkGhost" aria-hidden="true"></div>
         <textarea id="inkInput" class="ink-input" rows="4"
           placeholder="${esc(modePlaceholder(state.mode))}"
           aria-label="Write in the grimoire"></textarea>
-        <div class="ink-actions">
-          <span class="hint">Tip: <kbd>Ctrl</kbd>+<kbd>Enter</kbd> to inscribe</span>
+        <div class="ink-reply" id="inkReply" hidden></div>
+        <span class="stream-flag" id="streamFlag" hidden><i></i>streaming</span>
+      </div>
+      <div class="ink-actions">
+        <span class="hint" id="inkHint">Tip: <kbd>Ctrl</kbd>+<kbd>Enter</kbd> to inscribe</span>
+        <div class="ink-buttons" id="inkButtons">
           <button class="btn primary" id="inscribeBtn">Let the page drink it</button>
         </div>
-      </div>
-
-      <div class="reply-stage" id="replyStage" hidden>
-        <div class="reply-attrib">
-          ${sigilSvg(state.house, 22)}<span>The Founder's Echo replies</span>
-          <span class="stream-flag" id="streamFlag" hidden><i></i>streaming</span>
-        </div>
-        <div class="archmage" id="archmageReply"></div>
-        <div class="reply-controls" id="replyControls"></div>
       </div>
 
       <div class="past" id="past"></div>
     </section>`;
 
   const input = document.getElementById("inkInput");
-  const btn = document.getElementById("inscribeBtn");
-  btn.onclick = () => inscribe();
+  wireInscribeButton();
   input.addEventListener("keydown", (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); inscribe(); }
   });
@@ -258,18 +252,13 @@ function viewJournal() {
   });
   $view.querySelectorAll(".vmode").forEach((b) => {
     b.onclick = () => {
+      if (busy) return;
       state.viewMode = b.dataset.view; persist();
       $view.querySelectorAll(".vmode").forEach((x) => x.classList.toggle("active", x.dataset.view === state.viewMode));
-      const replyEl = document.getElementById("archmageReply");
-      const stage = document.getElementById("replyStage");
-      const controls = document.getElementById("replyControls");
-      if (state.viewMode === "vanishing") {
-        // Switching to Vanishing drinks whatever reply is on the page right now.
-        if (stage && !stage.hidden && replyEl && (replyEl.textContent || "").trim() && !busy) {
-          vanishNow(replyEl, stage, controls);
-        }
-      } else {
-        cancelVanish();
+      // Switching to Vanishing drinks whatever reply is on the page right now.
+      const inkReply = document.getElementById("inkReply");
+      if (state.viewMode === "vanishing" && inkReply && !inkReply.hidden && (inkReply.textContent || "").trim()) {
+        vanishAndRestore(true);
       }
       renderPast();
     };
@@ -278,22 +267,54 @@ function viewJournal() {
   renderPast();
 }
 
-let vanishTimer = null;
-function cancelVanish() { if (vanishTimer) { clearTimeout(vanishTimer); vanishTimer = null; } }
-
-function scheduleVanish(replyEl, stage, controls) {
-  cancelVanish();
-  vanishTimer = setTimeout(() => vanishNow(replyEl, stage, controls), 5200);
+// The inscribe button is re-rendered around each turn, so (re)bind it on demand.
+function wireInscribeButton() {
+  const btn = document.getElementById("inscribeBtn");
+  if (btn) btn.onclick = () => inscribe();
 }
 
-async function vanishNow(replyEl, stage, controls) {
-  cancelVanish();
-  if (!replyEl || !stage) return;
-  const txt = replyEl.textContent || "";
-  if (controls) controls.innerHTML = "";
-  if (txt.trim()) await dissolveInk(replyEl, txt);
-  stage.hidden = true;
-  replyEl.innerHTML = "";
+// ---- unified reply surface: countdown + vanish/restore --------------------
+
+let countdownTimer = null;
+let countdownRemaining = 0;
+let countdownPaused = false;
+
+function cancelCountdown() {
+  if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
+}
+
+function startCountdown(seconds, onDone) {
+  cancelCountdown();
+  countdownRemaining = seconds;
+  countdownPaused = false;
+  const hint = document.getElementById("inkHint");
+  const paint = () => {
+    if (hint) hint.innerHTML = `&#127787; the page drinks in ${countdownRemaining}s <span class="hint-sub">(hover the reply to pause)</span>`;
+  };
+  paint();
+  countdownTimer = setInterval(() => {
+    if (countdownPaused) return;
+    countdownRemaining -= 1;
+    if (countdownRemaining <= 0) { cancelCountdown(); onDone(); }
+    else paint();
+  }, 1000);
+}
+
+// Dissolve the reply from the shared surface and bring the writing page back.
+async function vanishAndRestore(dissolve = true) {
+  cancelCountdown();
+  const inkReply = document.getElementById("inkReply");
+  const input = document.getElementById("inkInput");
+  const hint = document.getElementById("inkHint");
+  if (inkReply && (inkReply.textContent || "").trim() && dissolve) {
+    await dissolveInk(inkReply, inkReply.textContent);
+  }
+  if (inkReply) { inkReply.hidden = true; inkReply.innerHTML = ""; }
+  if (input) { input.style.display = ""; input.disabled = false; }
+  if (hint) hint.innerHTML = `Tip: <kbd>Ctrl</kbd>+<kbd>Enter</kbd> to inscribe`;
+  const buttons = document.getElementById("inkButtons");
+  if (buttons) { buttons.innerHTML = `<button class="btn primary" id="inscribeBtn">Let the page drink it</button>`; wireInscribeButton(); }
+  if (input) input.focus();
 }
 
 function modePlaceholder(mode) {
@@ -333,61 +354,58 @@ async function inscribe() {
 }
 
 function setInputsDisabled(disabled) {
-  const btn = document.getElementById("inscribeBtn");
   const input = document.getElementById("inkInput");
-  if (btn) btn.disabled = disabled;
   if (input) input.disabled = disabled;
-  $view.querySelectorAll(".mode").forEach((m) => { m.disabled = disabled; });
+  $view.querySelectorAll(".mode, .vmode").forEach((m) => { m.disabled = disabled; });
 }
 
-// Runs one Archmage turn. isRegen=true replaces the last entry (no extra Aura).
+// Runs one Archmage turn on the SHARED page surface. The reply is written where
+// you type; a countdown then drinks it away (Diary keeps a copy in the log below).
+// isRegen=true replaces the last entry (no extra Aura).
 async function generateReply(text, isRegen = false) {
   if (busy) return;
   busy = true;
   lastPrompt = text;
-  cancelVanish();
+  cancelCountdown();
 
-  const stage = document.getElementById("replyStage");
-  const replyEl = document.getElementById("archmageReply");
-  const controls = document.getElementById("replyControls");
-  const flag = document.getElementById("streamFlag");
+  const inkWell = document.getElementById("inkWell");
+  const inkReply = document.getElementById("inkReply");
   const input = document.getElementById("inkInput");
+  const flag = document.getElementById("streamFlag");
+  const buttons = document.getElementById("inkButtons");
+  const hint = document.getElementById("inkHint");
   setInputsDisabled(true);
 
-  stage.hidden = false;
-  replyEl.innerHTML = `<span class="stir">the ink stirs<span class="dots"></span></span>`;
-  if (controls) controls.innerHTML = "";
+  // Reveal the shared reply surface in place of the writing page.
+  if (input) input.style.display = "none";
+  if (inkReply) { inkReply.hidden = false; inkReply.innerHTML = `<span class="stir">the ink stirs<span class="dots"></span></span>`; }
   if (flag) flag.hidden = true;
-  stage.scrollIntoView({ behavior: "smooth", block: "center" });
+  if (hint) hint.textContent = "the Founder's Echo replies…";
+  if (buttons) buttons.innerHTML = "";
+  if (inkWell) inkWell.scrollIntoView({ behavior: "smooth", block: "center" });
 
   let result;
   const usingServer = (state.serverUrl || "").trim();
 
   if (usingServer) {
-    // Streaming path — tokens flow straight into a live quill as they arrive.
+    // Streaming path — tokens flow straight into a live quill on the page.
     let streamer = null;
     currentAbort = new AbortController();
-    if (controls) {
-      controls.innerHTML = `<button class="btn small ghost" id="stopBtn">&#9632; Stop writing</button>`;
-      document.getElementById("stopBtn").onclick = () => { if (currentAbort) currentAbort.abort(); };
+    if (buttons) {
+      buttons.innerHTML = `<button class="btn small ghost" id="stopBtn">&#9632; Stop writing</button>`;
+      const sb = document.getElementById("stopBtn"); if (sb) sb.onclick = () => { if (currentAbort) currentAbort.abort(); };
     }
     try {
       result = await askArchmageStream(text, state, state.mode, (delta) => {
-        if (!streamer) {
-          replyEl.innerHTML = "";
-          streamer = createQuillStream(replyEl, { speed: 16 });
-          if (flag) flag.hidden = false;
-        }
+        if (!streamer) { inkReply.innerHTML = ""; streamer = createQuillStream(inkReply, { speed: 16 }); if (flag) flag.hidden = false; }
         streamer.push(delta);
       }, currentAbort.signal);
       if (streamer) { streamer.end(result && result.text); await streamer.finished; }
-      else { replyEl.innerHTML = ""; await typeQuill(replyEl, (result && result.text) || "", { speed: 22 }).promise; }
+      else { inkReply.innerHTML = ""; await typeQuill(inkReply, (result && result.text) || "", { speed: 22 }).promise; }
     } catch (e) {
       if (streamer) streamer.cancel();
-      // Fall back to Gemini / offline without re-hitting the local server.
       result = await askArchmage(text, { ...state, serverUrl: "" }, state.mode);
-      replyEl.innerHTML = "";
-      await typeQuill(replyEl, result.text, { speed: 22 }).promise;
+      inkReply.innerHTML = ""; await typeQuill(inkReply, result.text, { speed: 22 }).promise;
       toast("The stream faltered — the Echo finished the thought.", "warn");
     } finally {
       currentAbort = null;
@@ -399,13 +417,10 @@ async function generateReply(text, isRegen = false) {
     } catch (e) {
       result = { text: "The echo wavers, and the page falls quiet a moment. Try once more.", source: "error" };
     }
-    replyEl.innerHTML = "";
-    await typeQuill(replyEl, result.text, { speed: 22 }).promise;
+    inkReply.innerHTML = ""; await typeQuill(inkReply, result.text, { speed: 22 }).promise;
   }
 
-  if (result.source === "error") {
-    toast("The bound familiar did not answer — the offline Echo spoke instead.", "warn");
-  }
+  if (result.source === "error") toast("The bound familiar did not answer — the offline Echo spoke instead.", "warn");
   if (result.aborted) toast("Stopped — the Archmage set down his quill.", "warn");
 
   // Record + reward (only if something was actually written).
@@ -425,20 +440,28 @@ async function generateReply(text, isRegen = false) {
     renderPast();
   }
 
-  // Offer to regenerate the same prompt.
-  if (controls) {
-    controls.innerHTML = `<button class="btn small ghost" id="regenBtn">&#8635; Regenerate</button>`;
-    document.getElementById("regenBtn").onclick = () => { if (!busy) generateReply(lastPrompt, true); };
-  }
-
   busy = false;
   setInputsDisabled(false);
-  if (input) input.focus();
 
-  // In Vanishing mode the page drinks the reply once you've had a moment to read it.
-  if (state.viewMode === "vanishing" && stored) {
-    scheduleVanish(replyEl, stage, controls);
+  if (!stored) { await vanishAndRestore(false); return; }
+
+  // Controls beneath the shared surface.
+  if (buttons) {
+    buttons.innerHTML =
+      `<button class="btn small ghost" id="regenBtn">&#8635; Regenerate</button>` +
+      `<button class="btn small ghost" id="againBtn">&#9998; Write again</button>`;
+    const rb = document.getElementById("regenBtn"); if (rb) rb.onclick = () => { if (!busy) generateReply(lastPrompt, true); };
+    const ab = document.getElementById("againBtn"); if (ab) ab.onclick = () => { if (!busy) vanishAndRestore(true); };
   }
+
+  // Hover the reply to pause the countdown so long passages can be read.
+  if (inkReply) {
+    inkReply.onmouseenter = () => { countdownPaused = true; };
+    inkReply.onmouseleave = () => { countdownPaused = false; };
+  }
+
+  // The page drinks the reply on a timer, then the writing page returns.
+  startCountdown(7, () => { vanishAndRestore(true); });
 }
 
 function announceUnlocks(before, after) {
